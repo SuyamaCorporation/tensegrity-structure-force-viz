@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tensegrity Structure Force Visualization</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  #tensCanvas { cursor: grab; display: block; }
+  #tensCanvas:active { cursor: grabbing; }
+  .struct-btn.active {
+    background: #3b82f6 !important;
+    box-shadow: 0 0 0 2px #93c5fd;
+  }
+  .force-bar-bg { background: #1f2937; border-radius: 4px; height: 8px; overflow: hidden; }
+  .force-bar-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
+</style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen flex flex-col">
+<header class="bg-gray-800 border-b border-gray-700 px-5 py-3">
+  <h1 class="text-xl font-bold text-cyan-400">🔩 Tensegrity Structure Force Visualization</h1>
+  <p class="text-gray-400 text-xs mt-0.5">Interactive 2D tensegrity: drag nodes, toggle labels, inspect force distribution</p>
+</header>
+
+<main class="flex flex-col lg:flex-row flex-1 gap-3 p-3">
+
+  <!-- Canvas Panel -->
+  <div class="flex-1 bg-gray-800 rounded-xl border border-gray-700 p-3 flex flex-col">
+    <!-- Toolbar -->
+    <div class="flex flex-wrap items-center gap-2 mb-3">
+      <span class="text-xs text-gray-400">Structure:</span>
+      <button id="btnSimplex" onclick="loadStructure('simplex')"
+              class="struct-btn px-3 py-1 rounded-lg text-xs font-semibold bg-gray-700 hover:bg-gray-600 transition-colors active"
+              aria-label="Load 3-strut simplex structure">
+        Simplex (3-strut)
+      </button>
+      <button id="btnDouble" onclick="loadStructure('double')"
+              class="struct-btn px-3 py-1 rounded-lg text-xs font-semibold bg-gray-700 hover:bg-gray-600 transition-colors"
+              aria-label="Load 6-strut double layer structure">
+        Double Layer (6-strut)
+      </button>
+      <button id="btnXmod" onclick="loadStructure('xmod')"
+              class="struct-btn px-3 py-1 rounded-lg text-xs font-semibold bg-gray-700 hover:bg-gray-600 transition-colors"
+              aria-label="Load X-module structure">
+        X-Module
+      </button>
+      <button id="btnPrism" onclick="loadStructure('prism')"
+              class="struct-btn px-3 py-1 rounded-lg text-xs font-semibold bg-gray-700 hover:bg-gray-600 transition-colors"
+              aria-label="Load tensegrity prism structure">
+        Prism (4-strut)
+      </button>
+      <div class="ml-auto flex gap-2">
+        <button id="btnLabels" onclick="toggleLabels()"
+                class="px-3 py-1 rounded-lg text-xs font-semibold bg-gray-700 hover:bg-gray-600 transition-colors"
+                aria-label="Toggle force labels">
+          Labels: ON
+        </button>
+        <button onclick="resetNodes()"
+                class="px-3 py-1 rounded-lg text-xs font-semibold bg-gray-700 hover:bg-gray-600 transition-colors"
+                aria-label="Reset node positions">
+          ↺ Reset
+        </button>
+      </div>
+    </div>
+
+    <canvas id="tensCanvas" width="700" height="440" class="w-full flex-1 rounded-lg bg-gray-900"
+            aria-label="Tensegrity structure canvas, drag nodes to modify structure"></canvas>
+
+    <!-- Force scale legend -->
+    <div class="mt-2 flex items-center gap-4 text-xs">
+      <span class="flex items-center gap-1.5">
+        <span class="inline-block w-8 h-2 rounded" style="background:#3b82f6"></span>
+        Compression (strut)
+      </span>
+      <span class="flex items-center gap-1.5">
+        <span class="inline-block w-8 h-1 rounded" style="background:#ef4444"></span>
+        Tension (cable)
+      </span>
+      <span class="text-gray-500">Line thickness ∝ force magnitude</span>
+      <span id="equilibriumBadge" class="ml-auto px-2 py-0.5 rounded text-xs font-bold bg-green-800 text-green-200">
+        ✓ Equilibrium
+      </span>
+    </div>
+  </div>
+
+  <!-- Side Panel -->
+  <div class="w-full lg:w-64 flex flex-col gap-3">
+
+    <!-- Structure Stats -->
+    <div class="bg-gray-800 rounded-xl border border-gray-700 p-4">
+      <h2 class="text-cyan-400 font-bold text-sm mb-3">Structure Properties</h2>
+      <div class="space-y-2 text-xs">
+        <div class="flex justify-between">
+          <span class="text-gray-400">Struts (compression):</span>
+          <span id="statStruts" class="text-blue-300 font-mono font-bold">3</span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-gray-400">Cables (tension):</span>
+          <span id="statCables" class="text-red-300 font-mono font-bold">9</span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-gray-400">Nodes:</span>
+          <span id="statNodes" class="text-white font-mono font-bold">6</span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-gray-400">Max strut force:</span>
+          <span id="statMaxStrut" class="text-blue-300 font-mono">—</span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-gray-400">Max cable force:</span>
+          <span id="statMaxCable" class="text-red-300 font-mono">—</span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-gray-400">Total prestress:</span>
+          <span id="statPrestress" class="text-yellow-300 font-mono">—</span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-gray-400">Self-stress state:</span>
+          <span id="statSelfStress" class="text-green-300 font-semibold">Active</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Member Force List -->
+    <div class="bg-gray-800 rounded-xl border border-gray-700 p-4 flex-1 overflow-y-auto" style="max-height: 300px;">
+      <h2 class="text-cyan-400 font-bold text-sm mb-3">Member Forces</h2>
+      <div id="forceList" class="space-y-1.5 text-xs"></div>
+    </div>
+
+    <!-- Buckminster Fuller info -->
+    <div class="bg-gray-800 rounded-xl border border-gray-700 p-4">
+      <h2 class="text-yellow-400 font-bold text-sm mb-2">What is Tensegrity?</h2>
+      <p class="text-gray-300 text-xs leading-relaxed mb-2">
+        <strong class="text-white">Tensegrity</strong> (Buckminster Fuller, 1949) = "tensional integrity."
+        Rigid struts float in a continuous network of tension cables — never touching each other.
+      </p>
+      <p class="text-gray-300 text-xs leading-relaxed mb-2">
+        The structure achieves stability through <em class="text-yellow-300">prestress</em>: cables are always in tension,
+        struts always in compression, and the system reaches force equilibrium at every node.
+      </p>
+      <p class="text-gray-400 text-xs leading-relaxed">
+        Applications: geodesic domes, bridges, biological cells (cytoskeleton), robotic arms, space structures.
+      </p>
+    </div>
+  </div>
+</main>
+
+<script>
+const canvas = document.getElementById('tensCanvas');
+const ctx = canvas.getContext('2d');
+let showLabels = true;
+let nodes = [];
+let members = []; // {a, b, type: 'strut'|'cable', restLength, force, color}
+let draggingNode = null;
+let dragOffX = 0, dragOffY = 0;
+let currentStructure = 'simplex';
+
+// ========== STRUCTURE DEFINITIONS ==========
+// Node positions are relative to center, will be scaled on load
+const structures = {
+  simplex: {
+    name: 'Simplex Tensegrity (3-strut prism)',
+    nodeCount: 6,
+    nodes: () => {
+      const cx = canvas.width/2, cy = canvas.height/2, r = 130, r2 = 90;
+      return [
+        // Top triangle (rotated 60°)
+        {x: cx + r*Math.cos(Math.PI/6), y: cy - r2 + r*Math.sin(Math.PI/6)*0.3, id:0},
+        {x: cx + r*Math.cos(Math.PI/6 + 2*Math.PI/3), y: cy - r2 + r*Math.sin(Math.PI/6 + 2*Math.PI/3)*0.3, id:1},
+        {x: cx + r*Math.cos(Math.PI/6 + 4*Math.PI/3), y: cy - r2 + r*Math.sin(Math.PI/6 + 4*Math.PI/3)*0.3, id:2},
+        // Bottom triangle
+        {x: cx + r*Math.cos(0), y: cy + r2 + r*Math.sin(0)*0.3, id:3},
+        {x: cx + r*Math.cos(2*Math.PI/3), y: cy + r2 + r*Math.sin(2*Math.PI/3)*0.3, id:4},
+        {x: cx + r*Math.cos(4*Math.PI/3), y: cy + r2 + r*Math.sin(4*Math.PI/3)*0.3, id:5},
+      ];
+    },
+    members: [
+      // 3 struts (compression) - diagonal crosses
+      {a:0, b:3, type:'strut'},
+      {a:1, b:4, type:'strut'},
+      {a:2, b:5, type:'strut'},
+      // Top triangle cables
+      {a:0, b:1, type:'cable'},
+      {a:1, b:2, type:'cable'},
+      {a:2, b:0, type:'cable'},
+      // Bottom triangle cables
+      {a:3, b:4, type:'cable'},
+      {a:4, b:5, type:'cable'},
+      {a:5, b:3, type:'cable'},
+      // Diagonal cables (cross-connecting)
+      {a:0, b:4, type:'cable'},
+      {a:1, b:5, type:'cable'},
+      {a:2, b:3, type:'cable'},
+    ]
+  },
+  double: {
+    name: 'Double Layer Tensegrity (6-strut)',
+    nodeCount: 8,
+    nodes: () => {
+      const cx = canvas.width/2, cy = canvas.height/2, r = 150, ry = 90;
+      // Octahedron-like
+      return [
+        {x:cx, y:cy-ry, id:0},           // top
+        {x:cx+r, y:cy-ry*0.3, id:1},     // upper-right
+        {x:cx+r*0.6, y:cy+ry, id:2},     // lower-right
+        {x:cx-r*0.6, y:cy+ry, id:3},     // lower-left
+        {x:cx-r, y:cy-ry*0.3, id:4},     // upper-left
+        {x:cx, y:cy-ry*0.7, id:5},       // inner-top
+        {x:cx+r*0.5, y:cy+ry*0.3, id:6}, // inner-right
+        {x:cx-r*0.5, y:cy+ry*0.3, id:7}, // inner-left
+      ];
+    },
+    members: [
+      // Struts
+      {a:0, b:2, type:'strut'},
+      {a:0, b:3, type:'strut'},
+      {a:1, b:3, type:'strut'},
+      {a:1, b:7, type:'strut'},
+      {a:4, b:2, type:'strut'},
+      {a:4, b:6, type:'strut'},
+      // Outer cables
+      {a:0, b:1, type:'cable'},
+      {a:1, b:2, type:'cable'},
+      {a:2, b:3, type:'cable'},
+      {a:3, b:4, type:'cable'},
+      {a:4, b:0, type:'cable'},
+      // Inner cables
+      {a:5, b:6, type:'cable'},
+      {a:6, b:7, type:'cable'},
+      {a:7, b:5, type:'cable'},
+      // Cross cables
+      {a:0, b:5, type:'cable'},
+      {a:1, b:6, type:'cable'},
+      {a:4, b:7, type:'cable'},
+      {a:2, b:6, type:'cable'},
+      {a:3, b:7, type:'cable'},
+    ]
+  },
+  xmod: {
+    name: 'X-Module Tensegrity',
+    nodeCount: 8,
+    nodes: () => {
+      const cx = canvas.width/2, cy = canvas.height/2, r=140, ry=80;
+      return [
+        {x:cx-r, y:cy-ry, id:0},   // top-left
+        {x:cx+r, y:cy-ry, id:1},   // top-right
+        {x:cx+r, y:cy+ry, id:2},   // bottom-right
+        {x:cx-r, y:cy+ry, id:3},   // bottom-left
+        {x:cx-r*0.4, y:cy-ry*0.5, id:4}, // inner-top-left
+        {x:cx+r*0.4, y:cy-ry*0.5, id:5}, // inner-top-right
+        {x:cx+r*0.4, y:cy+ry*0.5, id:6}, // inner-bottom-right
+        {x:cx-r*0.4, y:cy+ry*0.5, id:7}, // inner-bottom-left
+      ];
+    },
+    members: [
+      // Struts (X crossing pattern)
+      {a:0, b:2, type:'strut'},
+      {a:1, b:3, type:'strut'},
+      {a:4, b:6, type:'strut'},
+      {a:5, b:7, type:'strut'},
+      // Outer cables
+      {a:0, b:1, type:'cable'},
+      {a:1, b:2, type:'cable'},
+      {a:2, b:3, type:'cable'},
+      {a:3, b:0, type:'cable'},
+      // Inner cables
+      {a:4, b:5, type:'cable'},
+      {a:5, b:6, type:'cable'},
+      {a:6, b:7, type:'cable'},
+      {a:7, b:4, type:'cable'},
+      // Cross-links
+      {a:0, b:4, type:'cable'},
+      {a:1, b:5, type:'cable'},
+      {a:2, b:6, type:'cable'},
+      {a:3, b:7, type:'cable'},
+    ]
+  },
+  prism: {
+    name: 'Tensegrity Prism (4-strut)',
+    nodeCount: 8,
+    nodes: () => {
+      const cx=canvas.width/2, cy=canvas.height/2, r=140, ry=95;
+      return [
+        {x:cx-r*0.7, y:cy-ry, id:0},
+        {x:cx+r*0.7, y:cy-ry, id:1},
+        {x:cx+r,     y:cy,    id:2},
+        {x:cx+r*0.7, y:cy+ry, id:3},
+        {x:cx-r*0.7, y:cy+ry, id:4},
+        {x:cx-r,     y:cy,    id:5},
+        {x:cx,       y:cy-ry*0.4, id:6},
+        {x:cx,       y:cy+ry*0.4, id:7},
+      ];
+    },
+    members: [
+      // Struts
+      {a:0, b:3, type:'strut'},
+      {a:1, b:4, type:'strut'},
+      {a:2, b:5, type:'strut'},
+      {a:6, b:7, type:'strut'},
+      // Top cables
+      {a:0, b:1, type:'cable'},
+      {a:1, b:2, type:'cable'},
+      {a:0, b:5, type:'cable'},
+      // Bottom cables
+      {a:3, b:4, type:'cable'},
+      {a:4, b:5, type:'cable'},
+      {a:3, b:2, type:'cable'},
+      // Cross cables
+      {a:0, b:6, type:'cable'},
+      {a:1, b:6, type:'cable'},
+      {a:6, b:2, type:'cable'},
+      {a:7, b:3, type:'cable'},
+      {a:7, b:4, type:'cable'},
+      {a:7, b:5, type:'cable'},
+    ]
+  }
+};
+
+function loadStructure(name) {
+  currentStructure = name;
+  const s = structures[name];
+  nodes = s.nodes();
+  members = s.members.map(m => ({
+    ...m,
+    restLength: dist(nodes[m.a], nodes[m.b]) * 0.95,
+    force: 0
+  }));
+
+  // Update buttons
+  document.querySelectorAll('.struct-btn').forEach(b => b.classList.remove('active'));
+  const btnId = name === 'simplex' ? 'btnSimplex' : name === 'double' ? 'btnDouble' : name === 'xmod' ? 'btnXmod' : 'btnPrism';
+  document.getElementById(btnId).classList.add('active');
+
+  computeForces();
+  updateStats();
+  draw();
+}
+
+function dist(a, b) {
+  return Math.sqrt((b.x-a.x)**2 + (b.y-a.y)**2);
+}
+
+function computeForces() {
+  // Simple spring model: F = k * (currentLength - restLength)
+  // Cables: tension only (F > 0 means elongated → pulling)
+  // Struts: compression only (shorter than rest → pushing)
+  const kCable = 0.8, kStrut = 1.2;
+  members.forEach(m => {
+    const d = dist(nodes[m.a], nodes[m.b]);
+    const k = m.type === 'strut' ? kStrut : kCable;
+    if (m.type === 'cable') {
+      // Cable can only be in tension
+      m.force = Math.max(0, k * (d - m.restLength));
+    } else {
+      // Strut can only be in compression
+      m.force = Math.max(0, k * (m.restLength - d));
+    }
+    m.currentLength = d;
+  });
+}
+
+function checkEquilibrium() {
+  // Check if net force on each node is "small" (for display purposes)
+  // Simplified: check cable/strut balance
+  let totalImbalance = 0;
+  nodes.forEach(node => {
+    let fx = 0, fy = 0;
+    members.forEach(m => {
+      if (m.a !== node.id && m.b !== node.id) return;
+      const other = m.a === node.id ? nodes[m.b] : nodes[m.a];
+      const d = dist(node, other);
+      if (d < 0.001) return;
+      const nx = (other.x - node.x) / d;
+      const ny = (other.y - node.y) / d;
+      const sign = m.type === 'cable' ? 1 : -1;
+      fx += sign * m.force * nx;
+      fy += sign * m.force * ny;
+    });
+    totalImbalance += Math.sqrt(fx*fx + fy*fy);
+  });
+  return totalImbalance / nodes.length;
+}
+
+function updateStats() {
+  const strutMembers = members.filter(m => m.type === 'strut');
+  const cableMembers = members.filter(m => m.type === 'cable');
+  const maxStrut = Math.max(...strutMembers.map(m => m.force));
+  const maxCable = Math.max(...cableMembers.map(m => m.force));
+  const totalPrestress = members.reduce((s,m) => s + m.force, 0);
+
+  document.getElementById('statStruts').textContent = strutMembers.length;
+  document.getElementById('statCables').textContent = cableMembers.length;
+  document.getElementById('statNodes').textContent = nodes.length;
+  document.getElementById('statMaxStrut').textContent = maxStrut.toFixed(2) + ' N';
+  document.getElementById('statMaxCable').textContent = maxCable.toFixed(2) + ' N';
+  document.getElementById('statPrestress').textContent = totalPrestress.toFixed(2) + ' N';
+
+  const imbalance = checkEquilibrium();
+  const badge = document.getElementById('equilibriumBadge');
+  if (imbalance < 2.0) {
+    badge.textContent = '✓ Equilibrium';
+    badge.className = 'ml-auto px-2 py-0.5 rounded text-xs font-bold bg-green-800 text-green-200';
+    document.getElementById('statSelfStress').textContent = 'Active';
+    document.getElementById('statSelfStress').className = 'text-green-300 font-semibold';
+  } else {
+    badge.textContent = '⚠ Not Equilibrium';
+    badge.className = 'ml-auto px-2 py-0.5 rounded text-xs font-bold bg-red-800 text-red-200';
+    document.getElementById('statSelfStress').textContent = 'Disturbed';
+    document.getElementById('statSelfStress').className = 'text-yellow-300 font-semibold';
+  }
+
+  // Force list
+  const fl = document.getElementById('forceList');
+  fl.innerHTML = '';
+  const maxForce = Math.max(0.01, ...members.map(m => m.force));
+  members.forEach((m, i) => {
+    const isStrut = m.type === 'strut';
+    const color = isStrut ? '#3b82f6' : '#ef4444';
+    const barColor = isStrut ? 'bg-blue-500' : 'bg-red-500';
+    const pct = (m.force / maxForce * 100).toFixed(0);
+    const row = document.createElement('div');
+    row.innerHTML = `
+      <div class="flex justify-between mb-0.5">
+        <span style="color:${color}">${isStrut ? '⬛' : '➖'} ${m.a}→${m.b}</span>
+        <span class="font-mono text-gray-300">${m.force.toFixed(2)}N ${isStrut ? '(C)' : '(T)'}</span>
+      </div>
+      <div class="force-bar-bg">
+        <div class="force-bar-fill ${barColor}" style="width:${pct}%"></div>
+      </div>
+    `;
+    fl.appendChild(row);
+  });
+}
+
+function draw() {
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#111827';
+  ctx.fillRect(0, 0, W, H);
+
+  computeForces();
+  const maxForce = Math.max(0.01, ...members.map(m => m.force));
+
+  // Draw members
+  members.forEach(m => {
+    const a = nodes[m.a], b = nodes[m.b];
+    const isStrut = m.type === 'strut';
+    const intensity = Math.pow(m.force / maxForce, 0.5);
+
+    if (isStrut) {
+      // Thick blue rod
+      const alpha = 0.4 + 0.6 * intensity;
+      ctx.strokeStyle = `rgba(59, 130, 246, ${alpha})`;
+      ctx.lineWidth = 4 + intensity * 8;
+      ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+
+      // Highlight core
+      ctx.strokeStyle = `rgba(147, 197, 253, ${alpha * 0.6})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    } else {
+      // Thin red cable
+      const alpha = 0.3 + 0.7 * intensity;
+      ctx.strokeStyle = `rgba(239, 68, 68, ${alpha})`;
+      ctx.lineWidth = 1 + intensity * 3;
+      ctx.lineCap = 'round';
+      ctx.setLineDash(isStrut ? [] : []);
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    // Force labels
+    if (showLabels && m.force > 0.05) {
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      ctx.fillStyle = isStrut ? '#93c5fd' : '#fca5a5';
+      ctx.font = '9px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(m.force.toFixed(1), mx, my - 3);
+    }
+  });
+
+  // Draw nodes
+  nodes.forEach((n, i) => {
+    // Glow effect
+    const grd = ctx.createRadialGradient(n.x, n.y, 2, n.x, n.y, 14);
+    grd.addColorStop(0, 'rgba(6, 182, 212, 0.6)');
+    grd.addColorStop(1, 'rgba(6, 182, 212, 0)');
+    ctx.fillStyle = grd;
+    ctx.beginPath(); ctx.arc(n.x, n.y, 14, 0, 2*Math.PI); ctx.fill();
+
+    // Node circle
+    ctx.fillStyle = draggingNode === i ? '#22d3ee' : '#0e7490';
+    ctx.strokeStyle = '#67e8f9';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(n.x, n.y, 7, 0, 2*Math.PI);
+    ctx.fill(); ctx.stroke();
+
+    // Node label
+    if (showLabels) {
+      ctx.fillStyle = '#e2e8f0';
+      ctx.font = 'bold 10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(i, n.x, n.y + 3.5);
+    }
+  });
+
+  // Coordinate display on hover
+  updateStats();
+}
+
+function toggleLabels() {
+  showLabels = !showLabels;
+  document.getElementById('btnLabels').textContent = 'Labels: ' + (showLabels ? 'ON' : 'OFF');
+  draw();
+}
+
+function resetNodes() {
+  loadStructure(currentStructure);
+}
+
+// Mouse interaction
+function getCanvasPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+  return {
+    x: (clientX - rect.left) * scaleX,
+    y: (clientY - rect.top) * scaleY
+  };
+}
+
+canvas.addEventListener('mousedown', e => {
+  const pos = getCanvasPos(e);
+  draggingNode = null;
+  nodes.forEach((n, i) => {
+    if (Math.hypot(pos.x - n.x, pos.y - n.y) < 14) {
+      draggingNode = i;
+      dragOffX = pos.x - n.x;
+      dragOffY = pos.y - n.y;
+    }
+  });
+});
+
+canvas.addEventListener('mousemove', e => {
+  if (draggingNode === null) return;
+  const pos = getCanvasPos(e);
+  nodes[draggingNode].x = pos.x - dragOffX;
+  nodes[draggingNode].y = pos.y - dragOffY;
+  draw();
+});
+
+canvas.addEventListener('mouseup', () => { draggingNode = null; draw(); });
+canvas.addEventListener('mouseleave', () => { draggingNode = null; });
+
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const pos = getCanvasPos(e);
+  draggingNode = null;
+  nodes.forEach((n, i) => {
+    if (Math.hypot(pos.x - n.x, pos.y - n.y) < 18) {
+      draggingNode = i;
+      dragOffX = pos.x - n.x;
+      dragOffY = pos.y - n.y;
+    }
+  });
+}, {passive: false});
+
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  if (draggingNode === null) return;
+  const pos = getCanvasPos(e);
+  nodes[draggingNode].x = pos.x - dragOffX;
+  nodes[draggingNode].y = pos.y - dragOffY;
+  draw();
+}, {passive: false});
+
+canvas.addEventListener('touchend', () => { draggingNode = null; draw(); });
+
+// Resize canvas to fit
+function resizeCanvas() {
+  const container = canvas.parentElement;
+  const W = container.clientWidth - 24;
+  const H = Math.min(440, window.innerHeight * 0.55);
+  canvas.width = Math.max(400, W);
+  canvas.height = H;
+  loadStructure(currentStructure);
+}
+
+window.addEventListener('resize', resizeCanvas);
+window.addEventListener('load', () => {
+  resizeCanvas();
+  loadStructure('simplex');
+});
+
+// Animation loop for smooth dragging
+function animLoop() {
+  if (draggingNode !== null) draw();
+  requestAnimationFrame(animLoop);
+}
+animLoop();
+</script>
+</body>
+</html>
